@@ -2,10 +2,10 @@ import path from 'path'
 import { getBaseClasses, getCredentialData, getCredentialParam, getUserHome } from '../../../src/utils'
 import { SaverOptions } from './interface'
 import { ICommonObject, IDatabaseEntity, INode, INodeData, INodeParams } from '../../../src/Interface'
-import { SqliteSaver } from './sqliteSaver'
+import { SqliteSaver } from './SQLiteAgentMemory/sqliteSaver'
 import { DataSource } from 'typeorm'
-import { PostgresSaver } from './pgSaver'
-import { MySQLSaver } from './mysqlSaver'
+import { PostgresSaver } from './PostgresAgentMemory/pgSaver'
+import { MySQLSaver } from './MySQLAgentMemory/mysqlSaver'
 
 class AgentMemory_Memory implements INode {
     label: string
@@ -29,6 +29,7 @@ class AgentMemory_Memory implements INode {
         this.category = 'Memory'
         this.description = 'Memory for agentflow to remember the state of the conversation'
         this.baseClasses = [this.type, ...getBaseClasses(SqliteSaver)]
+        this.badge = 'DEPRECATING'
         this.credential = {
             label: 'Connect Credential',
             name: 'credential',
@@ -107,6 +108,7 @@ class AgentMemory_Memory implements INode {
         const databaseType = nodeData.inputs?.databaseType as string
         const databaseEntities = options.databaseEntities as IDatabaseEntity
         const chatflowid = options.chatflowid as string
+        const orgId = options.orgId as string
         const appDataSource = options.appDataSource as DataSource
 
         let additionalConfiguration = {}
@@ -134,7 +136,8 @@ class AgentMemory_Memory implements INode {
                 threadId,
                 appDataSource,
                 databaseEntities,
-                chatflowid
+                chatflowid,
+                orgId
             }
             const recordManager = new SqliteSaver(args)
             return recordManager
@@ -158,7 +161,8 @@ class AgentMemory_Memory implements INode {
                 threadId,
                 appDataSource,
                 databaseEntities,
-                chatflowid
+                chatflowid,
+                orgId
             }
             const recordManager = new PostgresSaver(args)
             return recordManager
@@ -183,7 +187,8 @@ class AgentMemory_Memory implements INode {
                 threadId,
                 appDataSource,
                 databaseEntities,
-                chatflowid
+                chatflowid,
+                orgId
             }
             const recordManager = new MySQLSaver(args)
             return recordManager

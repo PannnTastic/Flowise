@@ -9,34 +9,36 @@ import { getErrorMessage } from '../../errors/utils'
 // get stats for showing in chatflow
 const getChatflowStats = async (
     chatflowid: string,
-    chatTypeFilter: ChatType | undefined,
+    chatTypes: ChatType[] | undefined,
     startDate?: string,
     endDate?: string,
     messageId?: string,
     feedback?: boolean,
-    feedbackTypes?: ChatMessageRatingType[]
+    feedbackTypes?: ChatMessageRatingType[],
+    activeWorkspaceId?: string
 ): Promise<any> => {
     try {
-        const chatmessages = (await utilGetChatMessage(
+        const chatmessages = (await utilGetChatMessage({
             chatflowid,
-            chatTypeFilter,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
+            chatTypes,
             startDate,
             endDate,
             messageId,
             feedback,
-            feedbackTypes
-        )) as Array<ChatMessage & { feedback?: ChatMessageFeedback }>
+            feedbackTypes,
+            activeWorkspaceId
+        })) as Array<ChatMessage & { feedback?: ChatMessageFeedback }>
         const totalMessages = chatmessages.length
         const totalFeedback = chatmessages.filter((message) => message?.feedback).length
         const positiveFeedback = chatmessages.filter((message) => message?.feedback?.rating === 'THUMBS_UP').length
+        // count the number of unique sessions in the chatmessages - count unique sessionId
+        const uniqueSessions = new Set(chatmessages.map((message) => message.sessionId))
+        const totalSessions = uniqueSessions.size
         const dbResponse = {
             totalMessages,
             totalFeedback,
-            positiveFeedback
+            positiveFeedback,
+            totalSessions
         }
 
         return dbResponse

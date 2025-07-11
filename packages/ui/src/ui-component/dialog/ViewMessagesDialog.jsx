@@ -3,10 +3,6 @@ import { useDispatch, useSelector } from 'react-redux'
 import { useState, useEffect, forwardRef } from 'react'
 import PropTypes from 'prop-types'
 import moment from 'moment'
-import rehypeMathjax from 'rehype-mathjax'
-import rehypeRaw from 'rehype-raw'
-import remarkGfm from 'remark-gfm'
-import remarkMath from 'remark-math'
 import axios from 'axios'
 import { cloneDeep } from 'lodash'
 
@@ -28,9 +24,14 @@ import {
     CardContent,
     FormControlLabel,
     Checkbox,
-    DialogActions
+    DialogActions,
+    Pagination,
+    Typography,
+    Menu,
+    MenuItem,
+    IconButton
 } from '@mui/material'
-import { useTheme } from '@mui/material/styles'
+import { useTheme, styled, alpha } from '@mui/material/styles'
 import DatePicker from 'react-datepicker'
 
 import robotPNG from '@/assets/images/robot.png'
@@ -38,11 +39,11 @@ import userPNG from '@/assets/images/account.png'
 import msgEmptySVG from '@/assets/images/message_empty.svg'
 import multiagent_supervisorPNG from '@/assets/images/multiagent_supervisor.png'
 import multiagent_workerPNG from '@/assets/images/multiagent_worker.png'
-import { IconTool, IconDeviceSdCard, IconFileExport, IconEraser, IconX, IconDownload, IconPaperclip } from '@tabler/icons-react'
+import { IconTool, IconDeviceSdCard, IconFileExport, IconEraser, IconX, IconDownload, IconPaperclip, IconBulb } from '@tabler/icons-react'
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown'
 
 // Project import
 import { MemoizedReactMarkdown } from '@/ui-component/markdown/MemoizedReactMarkdown'
-import { CodeBlock } from '@/ui-component/markdown/CodeBlock'
 import SourceDocDialog from '@/ui-component/dialog/SourceDocDialog'
 import { MultiDropdown } from '@/ui-component/dropdown/MultiDropdown'
 import { StyledButton } from '@/ui-component/button/StyledButton'
@@ -67,6 +68,42 @@ import { enqueueSnackbar as enqueueSnackbarAction, closeSnackbar as closeSnackba
 
 import '@/views/chatmessage/ChatMessage.css'
 import 'react-datepicker/dist/react-datepicker.css'
+
+const StyledMenu = styled((props) => (
+    <Menu
+        elevation={0}
+        anchorOrigin={{
+            vertical: 'bottom',
+            horizontal: 'right'
+        }}
+        transformOrigin={{
+            vertical: 'top',
+            horizontal: 'right'
+        }}
+        {...props}
+    />
+))(({ theme }) => ({
+    '& .MuiPaper-root': {
+        borderRadius: 6,
+        marginTop: theme.spacing(1),
+        minWidth: 180,
+        boxShadow:
+            'rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0.05) 0px 0px 0px 1px, rgba(0, 0, 0, 0.1) 0px 10px 15px -3px, rgba(0, 0, 0, 0.05) 0px 4px 6px -2px',
+        '& .MuiMenu-list': {
+            padding: '4px 0'
+        },
+        '& .MuiMenuItem-root': {
+            '& .MuiSvgIcon-root': {
+                fontSize: 18,
+                color: theme.palette.text.secondary,
+                marginRight: theme.spacing(1.5)
+            },
+            '&:active': {
+                backgroundColor: alpha(theme.palette.primary.main, theme.palette.action.selectedOpacity)
+            }
+        }
+    }
+}))
 
 const DatePickerCustomInput = forwardRef(function DatePickerCustomInput({ value, onClick }, ref) {
     return (
@@ -109,10 +146,12 @@ const ConfirmDeleteMessageDialog = ({ show, dialogProps, onCancel, onConfirm }) 
             </DialogTitle>
             <DialogContent>
                 <span style={{ marginTop: '20px', marginBottom: '20px' }}>{dialogProps.description}</span>
-                <FormControlLabel
-                    control={<Checkbox checked={hardDelete} onChange={(event) => setHardDelete(event.target.checked)} />}
-                    label='Remove messages from 3rd party Memory Node'
-                />
+                {dialogProps.isChatflow && (
+                    <FormControlLabel
+                        control={<Checkbox checked={hardDelete} onChange={(event) => setHardDelete(event.target.checked)} />}
+                        label='Remove messages from 3rd party Memory Node'
+                    />
+                )}
             </DialogContent>
             <DialogActions>
                 <Button onClick={onCancel}>{dialogProps.cancelButtonName}</Button>
@@ -147,18 +186,20 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
     const [chatlogs, setChatLogs] = useState([])
     const [allChatlogs, setAllChatLogs] = useState([])
     const [chatMessages, setChatMessages] = useState([])
-    const [stats, setStats] = useState([])
+    const [stats, setStats] = useState({})
     const [selectedMessageIndex, setSelectedMessageIndex] = useState(0)
     const [selectedChatId, setSelectedChatId] = useState('')
     const [sourceDialogOpen, setSourceDialogOpen] = useState(false)
     const [sourceDialogProps, setSourceDialogProps] = useState({})
     const [hardDeleteDialogOpen, setHardDeleteDialogOpen] = useState(false)
     const [hardDeleteDialogProps, setHardDeleteDialogProps] = useState({})
-    const [chatTypeFilter, setChatTypeFilter] = useState([])
+    const [chatTypeFilter, setChatTypeFilter] = useState(['INTERNAL', 'EXTERNAL'])
     const [feedbackTypeFilter, setFeedbackTypeFilter] = useState([])
-    const [startDate, setStartDate] = useState(new Date().setMonth(new Date().getMonth() - 1))
+    const [startDate, setStartDate] = useState(new Date(new Date().setMonth(new Date().getMonth() - 1)))
     const [endDate, setEndDate] = useState(new Date())
     const [leadEmail, setLeadEmail] = useState('')
+    const [anchorEl, setAnchorEl] = useState(null)
+    const open = Boolean(anchorEl)
 
     const getChatmessageApi = useApi(chatmessageApi.getAllChatmessageFromChatflow)
     const getChatmessageFromPKApi = useApi(chatmessageApi.getChatmessageFromPK)
@@ -166,64 +207,70 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
     const getStoragePathFromServer = useApi(chatmessageApi.getStoragePath)
     let storagePath = ''
 
-    const onStartDateSelected = (date) => {
-        setStartDate(date)
+    /* Table Pagination */
+    const [currentPage, setCurrentPage] = useState(1)
+    const [pageLimit, setPageLimit] = useState(10)
+    const [total, setTotal] = useState(0)
+    const onChange = (event, page) => {
+        setCurrentPage(page)
+        refresh(page, pageLimit, startDate, endDate, chatTypeFilter, feedbackTypeFilter)
+    }
+
+    const refresh = (page, limit, startDate, endDate, chatTypes, feedbackTypes) => {
         getChatmessageApi.request(dialogProps.chatflow.id, {
-            startDate: date,
+            chatType: chatTypes.length ? chatTypes : undefined,
+            feedbackType: feedbackTypes.length ? feedbackTypes : undefined,
+            startDate: startDate,
             endDate: endDate,
-            chatType: chatTypeFilter.length ? chatTypeFilter : undefined
+            order: 'DESC',
+            page: page,
+            limit: limit
         })
         getStatsApi.request(dialogProps.chatflow.id, {
-            startDate: date,
-            endDate: endDate,
-            chatType: chatTypeFilter.length ? chatTypeFilter : undefined
+            chatType: chatTypes.length ? chatTypes : undefined,
+            feedbackType: feedbackTypes.length ? feedbackTypes : undefined,
+            startDate: startDate,
+            endDate: endDate
         })
+        setCurrentPage(page)
+    }
+
+    const onStartDateSelected = (date) => {
+        const updatedDate = new Date(date)
+        updatedDate.setHours(0, 0, 0, 0)
+        setStartDate(updatedDate)
+        refresh(1, pageLimit, updatedDate, endDate, chatTypeFilter, feedbackTypeFilter)
     }
 
     const onEndDateSelected = (date) => {
-        setEndDate(date)
-        getChatmessageApi.request(dialogProps.chatflow.id, {
-            endDate: date,
-            startDate: startDate,
-            chatType: chatTypeFilter.length ? chatTypeFilter : undefined
-        })
-        getStatsApi.request(dialogProps.chatflow.id, {
-            endDate: date,
-            startDate: startDate,
-            chatType: chatTypeFilter.length ? chatTypeFilter : undefined
-        })
+        const updatedDate = new Date(date)
+        updatedDate.setHours(23, 59, 59, 999)
+        setEndDate(updatedDate)
+        refresh(1, pageLimit, startDate, updatedDate, chatTypeFilter, feedbackTypeFilter)
     }
 
     const onChatTypeSelected = (chatTypes) => {
-        setChatTypeFilter(chatTypes)
-        getChatmessageApi.request(dialogProps.chatflow.id, {
-            chatType: chatTypes.length ? chatTypes : undefined,
-            startDate: startDate,
-            endDate: endDate
-        })
-        getStatsApi.request(dialogProps.chatflow.id, {
-            chatType: chatTypes.length ? chatTypes : undefined,
-            startDate: startDate,
-            endDate: endDate
-        })
+        // Parse the JSON string from MultiDropdown back to an array
+        let parsedChatTypes = []
+        if (chatTypes && typeof chatTypes === 'string' && chatTypes.startsWith('[') && chatTypes.endsWith(']')) {
+            parsedChatTypes = JSON.parse(chatTypes)
+        } else if (Array.isArray(chatTypes)) {
+            parsedChatTypes = chatTypes
+        }
+        setChatTypeFilter(parsedChatTypes)
+        refresh(1, pageLimit, startDate, endDate, parsedChatTypes, feedbackTypeFilter)
     }
 
     const onFeedbackTypeSelected = (feedbackTypes) => {
-        setFeedbackTypeFilter(feedbackTypes)
-
-        getChatmessageApi.request(dialogProps.chatflow.id, {
-            chatType: chatTypeFilter.length ? chatTypeFilter : undefined,
-            feedbackType: feedbackTypes.length ? feedbackTypes : undefined,
-            startDate: startDate,
-            endDate: endDate,
-            order: 'ASC'
-        })
-        getStatsApi.request(dialogProps.chatflow.id, {
-            chatType: chatTypeFilter.length ? chatTypeFilter : undefined,
-            feedbackType: feedbackTypes.length ? feedbackTypes : undefined,
-            startDate: startDate,
-            endDate: endDate
-        })
+        // Parse the JSON string from MultiDropdown back to an array
+        let parsedFeedbackTypes = []
+        if (feedbackTypes && typeof feedbackTypes === 'string' && feedbackTypes.startsWith('[') && feedbackTypes.endsWith(']')) {
+            parsedFeedbackTypes = JSON.parse(feedbackTypes)
+        } else if (Array.isArray(feedbackTypes)) {
+            parsedFeedbackTypes = feedbackTypes
+        }
+        setFeedbackTypeFilter(parsedFeedbackTypes)
+        refresh(1, pageLimit, startDate, endDate, chatTypeFilter, parsedFeedbackTypes)
     }
 
     const onDeleteMessages = () => {
@@ -231,7 +278,8 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
             title: 'Delete Messages',
             description: 'Are you sure you want to delete messages? This action cannot be undone.',
             confirmButtonName: 'Delete',
-            cancelButtonName: 'Cancel'
+            cancelButtonName: 'Cancel',
+            isChatflow: dialogProps.isChatflow
         })
         setHardDeleteDialogOpen(true)
     }
@@ -243,7 +291,7 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
             const obj = { chatflowid, isClearFromViewMessageDialog: true }
 
             let _chatTypeFilter = chatTypeFilter
-            if (typeof chatTypeFilter === 'string') {
+            if (typeof chatTypeFilter === 'string' && chatTypeFilter.startsWith('[') && chatTypeFilter.endsWith(']')) {
                 _chatTypeFilter = JSON.parse(chatTypeFilter)
             }
             if (_chatTypeFilter.length === 1) {
@@ -251,7 +299,7 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
             }
 
             let _feedbackTypeFilter = feedbackTypeFilter
-            if (typeof feedbackTypeFilter === 'string') {
+            if (typeof feedbackTypeFilter === 'string' && feedbackTypeFilter.startsWith('[') && feedbackTypeFilter.endsWith(']')) {
                 _feedbackTypeFilter = JSON.parse(feedbackTypeFilter)
             }
             if (_feedbackTypeFilter.length === 1) {
@@ -275,16 +323,7 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
                     )
                 }
             })
-            getChatmessageApi.request(chatflowid, {
-                chatType: chatTypeFilter.length ? chatTypeFilter : undefined,
-                startDate: startDate,
-                endDate: endDate
-            })
-            getStatsApi.request(chatflowid, {
-                chatType: chatTypeFilter.length ? chatTypeFilter : undefined,
-                startDate: startDate,
-                endDate: endDate
-            })
+            refresh(1, pageLimit, startDate, endDate, chatTypeFilter, feedbackTypeFilter)
         } catch (error) {
             console.error(error)
             enqueueSnackbar({
@@ -301,6 +340,15 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
                 }
             })
         }
+    }
+
+    const getChatType = (chatType) => {
+        if (chatType === 'INTERNAL') {
+            return 'UI'
+        } else if (chatType === 'EVALUATION') {
+            return 'Evaluation'
+        }
+        return 'API/Embed'
     }
 
     const exportMessages = async () => {
@@ -337,8 +385,8 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
             if (chatmsg.feedback) msg.feedback = chatmsg.feedback?.content
             if (chatmsg.agentReasoning) msg.agentReasoning = chatmsg.agentReasoning
             if (chatmsg.artifacts) {
-                obj.artifacts = chatmsg.artifacts
-                obj.artifacts.forEach((artifact) => {
+                msg.artifacts = chatmsg.artifacts
+                msg.artifacts.forEach((artifact) => {
                     if (artifact.type === 'png' || artifact.type === 'jpeg') {
                         artifact.data = `${baseURL}/api/v1/get-upload-file?chatflowId=${chatmsg.chatflowid}&chatId=${
                             chatmsg.chatId
@@ -349,7 +397,7 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
             if (!Object.prototype.hasOwnProperty.call(obj, chatPK)) {
                 obj[chatPK] = {
                     id: chatmsg.chatId,
-                    source: chatmsg.chatType === 'INTERNAL' ? 'UI' : 'API/Embed',
+                    source: getChatType(chatmsg.chatType),
                     sessionId: chatmsg.sessionId ?? null,
                     memoryType: chatmsg.memoryType ?? null,
                     email: chatmsg.leadEmail ?? null,
@@ -372,7 +420,9 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
         }
 
         const dataStr = JSON.stringify(exportMessages, null, 2)
-        const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr)
+        //const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr)
+        const blob = new Blob([dataStr], { type: 'application/json' })
+        const dataUri = URL.createObjectURL(blob)
 
         const exportFileDefaultName = `${dialogProps.chatflow.id}-Message.json`
 
@@ -421,8 +471,18 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
                         )
                     }
                 })
-                getChatmessageApi.request(chatflowid)
-                getStatsApi.request(chatflowid) // update stats
+                getChatmessageApi.request(chatflowid, {
+                    startDate: startDate,
+                    endDate: endDate,
+                    chatType: chatTypeFilter.length ? chatTypeFilter : undefined,
+                    feedbackType: feedbackTypeFilter.length ? feedbackTypeFilter : undefined
+                })
+                getStatsApi.request(chatflowid, {
+                    startDate: startDate,
+                    endDate: endDate,
+                    chatType: chatTypeFilter.length ? chatTypeFilter : undefined,
+                    feedbackType: feedbackTypeFilter.length ? feedbackTypeFilter : undefined
+                })
             } catch (error) {
                 enqueueSnackbar({
                     message: typeof error.response.data === 'object' ? error.response.data.message : error.response.data,
@@ -527,20 +587,42 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
                     item: allChatMessages[i]
                 }
             } else if (Object.prototype.hasOwnProperty.call(seen, PK) && seen[PK].counter === 1) {
+                // Properly identify user and API messages regardless of order
+                const firstMessage = seen[PK].item
+                const secondMessage = item
+
+                let userContent = ''
+                let apiContent = ''
+
+                // Check both messages and assign based on role, not order
+                if (firstMessage.role === 'userMessage') {
+                    userContent = `User: ${firstMessage.content}`
+                } else if (firstMessage.role === 'apiMessage') {
+                    apiContent = `Bot: ${firstMessage.content}`
+                }
+
+                if (secondMessage.role === 'userMessage') {
+                    userContent = `User: ${secondMessage.content}`
+                } else if (secondMessage.role === 'apiMessage') {
+                    apiContent = `Bot: ${secondMessage.content}`
+                }
+
                 seen[PK] = {
                     counter: 2,
                     item: {
                         ...seen[PK].item,
-                        apiContent:
-                            seen[PK].item.role === 'apiMessage' ? `Bot: ${seen[PK].item.content}` : `User: ${seen[PK].item.content}`,
-                        userContent: item.role === 'apiMessage' ? `Bot: ${item.content}` : `User: ${item.content}`
+                        apiContent,
+                        userContent
                     }
                 }
                 filteredChatLogs.push(seen[PK].item)
             }
         }
-        setChatLogs(filteredChatLogs)
-        if (filteredChatLogs.length) return getChatPK(filteredChatLogs[0])
+
+        // Sort by date to maintain chronological order
+        const sortedChatLogs = filteredChatLogs.sort((a, b) => new Date(b.createdDate) - new Date(a.createdDate))
+        setChatLogs(sortedChatLogs)
+        if (sortedChatLogs.length) return getChatPK(sortedChatLogs[0])
         return undefined
     }
 
@@ -583,6 +665,14 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
     const onSourceDialogClick = (data, title) => {
         setSourceDialogProps({ data, title })
         setSourceDialogOpen(true)
+    }
+
+    const handleClick = (event) => {
+        setAnchorEl(event.currentTarget)
+    }
+
+    const handleClose = () => {
+        setAnchorEl(null)
     }
 
     const renderFileUploads = (item, index) => {
@@ -678,27 +768,34 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
     useEffect(() => {
         if (getStatsApi.data) {
             setStats(getStatsApi.data)
+            setTotal(getStatsApi.data?.totalSessions ?? 0)
         }
     }, [getStatsApi.data])
 
     useEffect(() => {
         if (dialogProps.chatflow) {
-            getChatmessageApi.request(dialogProps.chatflow.id)
-            getStatsApi.request(dialogProps.chatflow.id)
+            refresh(currentPage, pageLimit, startDate, endDate, chatTypeFilter, feedbackTypeFilter)
+            getStatsApi.request(dialogProps.chatflow.id, {
+                startDate: startDate,
+                endDate: endDate
+            })
         }
 
         return () => {
             setChatLogs([])
             setAllChatLogs([])
             setChatMessages([])
-            setChatTypeFilter([])
+            setChatTypeFilter(['INTERNAL', 'EXTERNAL'])
             setFeedbackTypeFilter([])
             setSelectedMessageIndex(0)
             setSelectedChatId('')
-            setStartDate(new Date().setMonth(new Date().getMonth() - 1))
+            setStartDate(new Date(new Date().setMonth(new Date().getMonth() - 1)))
             setEndDate(new Date())
             setStats([])
             setLeadEmail('')
+            setTotal(0)
+            setCurrentPage(1)
+            setPageLimit(10)
         }
 
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -714,8 +811,7 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
         if (dialogProps.chatflow) {
             // when the filter is cleared fetch all messages
             if (feedbackTypeFilter.length === 0) {
-                getChatmessageApi.request(dialogProps.chatflow.id)
-                getStatsApi.request(dialogProps.chatflow.id)
+                refresh(currentPage, pageLimit, startDate, endDate, chatTypeFilter, feedbackTypeFilter)
             }
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -768,33 +864,7 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
                 </div>
             )
         } else {
-            return (
-                <MemoizedReactMarkdown
-                    remarkPlugins={[remarkGfm, remarkMath]}
-                    rehypePlugins={[rehypeMathjax, rehypeRaw]}
-                    components={{
-                        code({ inline, className, children, ...props }) {
-                            const match = /language-(\w+)/.exec(className || '')
-                            return !inline ? (
-                                <CodeBlock
-                                    key={Math.random()}
-                                    chatflowid={dialogProps.chatflow.id}
-                                    isDialog={true}
-                                    language={(match && match[1]) || ''}
-                                    value={String(children).replace(/\n$/, '')}
-                                    {...props}
-                                />
-                            ) : (
-                                <code className={className} {...props}>
-                                    {children}
-                                </code>
-                            )
-                        }
-                    }}
-                >
-                    {item.data}
-                </MemoizedReactMarkdown>
-            )
+            return <MemoizedReactMarkdown chatflowid={dialogProps.chatflow.id}>{item.data}</MemoizedReactMarkdown>
         }
     }
 
@@ -803,19 +873,10 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
             onClose={onCancel}
             open={show}
             fullWidth
-            maxWidth={'lg'}
+            maxWidth={'xl'}
             aria-labelledby='alert-dialog-title'
             aria-describedby='alert-dialog-description'
         >
-            <DialogTitle sx={{ fontSize: '1rem' }} id='alert-dialog-title'>
-                <div style={{ display: 'flex', flexDirection: 'row' }}>
-                    {dialogProps.title}
-                    <div style={{ flex: 1 }} />
-                    <Button variant='outlined' onClick={() => exportMessages()} startIcon={<IconFileExport />}>
-                        Export
-                    </Button>
-                </div>
-            </DialogTitle>
             <DialogContent>
                 <>
                     <div
@@ -873,6 +934,10 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
                                     {
                                         label: 'API/Embed',
                                         name: 'EXTERNAL'
+                                    },
+                                    {
+                                        label: 'Evaluations',
+                                        name: 'EVALUATION'
                                     }
                                 ]}
                                 onSelect={(newValue) => onChatTypeSelected(newValue)}
@@ -892,7 +957,7 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
                             <b style={{ marginRight: 10 }}>Feedback</b>
                             <MultiDropdown
                                 key={JSON.stringify(feedbackTypeFilter)}
-                                name='chatType'
+                                name='feedbackType'
                                 options={[
                                     {
                                         label: 'Positive',
@@ -909,31 +974,81 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
                             />
                         </div>
                         <div style={{ flex: 1 }}></div>
-                        {stats.totalMessages > 0 && (
-                            <Button color='error' variant='outlined' onClick={() => onDeleteMessages()} startIcon={<IconEraser />}>
-                                Delete Messages
-                            </Button>
-                        )}
+                        <Button
+                            id='messages-dialog-action-button'
+                            aria-controls={open ? 'messages-dialog-action-menu' : undefined}
+                            aria-haspopup='true'
+                            aria-expanded={open ? 'true' : undefined}
+                            variant={customization.isDarkMode ? 'contained' : 'outlined'}
+                            disableElevation
+                            color='secondary'
+                            onClick={handleClick}
+                            sx={{
+                                minWidth: 150,
+                                '&:hover': {
+                                    backgroundColor: customization.isDarkMode ? alpha(theme.palette.secondary.main, 0.8) : undefined
+                                }
+                            }}
+                            endIcon={
+                                <KeyboardArrowDownIcon style={{ backgroundColor: customization.isDarkMode ? 'transparent' : 'inherit' }} />
+                            }
+                        >
+                            More Actions
+                        </Button>
+                        <StyledMenu
+                            id='messages-dialog-action-menu'
+                            MenuListProps={{
+                                'aria-labelledby': 'messages-dialog-action-button'
+                            }}
+                            anchorEl={anchorEl}
+                            open={open}
+                            onClose={handleClose}
+                        >
+                            <MenuItem
+                                onClick={() => {
+                                    handleClose()
+                                    exportMessages()
+                                }}
+                                disableRipple
+                            >
+                                <IconFileExport style={{ marginRight: 8 }} />
+                                Export to JSON
+                            </MenuItem>
+                            {(stats.totalMessages ?? 0) > 0 && (
+                                <MenuItem
+                                    onClick={() => {
+                                        handleClose()
+                                        onDeleteMessages()
+                                    }}
+                                    disableRipple
+                                >
+                                    <IconEraser style={{ marginRight: 8 }} />
+                                    Delete All
+                                </MenuItem>
+                            )}
+                        </StyledMenu>
                     </div>
                     <div
                         style={{
                             display: 'grid',
-                            gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                            gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
                             gap: 10,
-                            marginBottom: 16,
+                            marginBottom: 25,
                             marginLeft: 8,
-                            marginRight: 8
+                            marginRight: 8,
+                            marginTop: 20
                         }}
                     >
-                        <StatsCard title='Total Messages' stat={`${stats.totalMessages}`} />
-                        <StatsCard title='Total Feedback Received' stat={`${stats.totalFeedback}`} />
+                        <StatsCard title='Total Sessions' stat={`${stats.totalSessions ?? 0}`} />
+                        <StatsCard title='Total Messages' stat={`${stats.totalMessages ?? 0}`} />
+                        <StatsCard title='Total Feedback Received' stat={`${stats.totalFeedback ?? 0}`} />
                         <StatsCard
                             title='Positive Feedback'
-                            stat={`${((stats.positiveFeedback / stats.totalFeedback) * 100 || 0).toFixed(2)}%`}
+                            stat={`${(((stats.positiveFeedback ?? 0) / (stats.totalFeedback ?? 1)) * 100 || 0).toFixed(2)}%`}
                         />
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'row' }}>
-                        {chatlogs && chatlogs.length == 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'row', overflow: 'hidden', minWidth: 0 }}>
+                        {chatlogs && chatlogs.length === 0 && (
                             <Stack sx={{ alignItems: 'center', justifyContent: 'center', width: '100%' }} flexDirection='column'>
                                 <Box sx={{ p: 5, height: 'auto' }}>
                                     <img
@@ -946,7 +1061,7 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
                             </Stack>
                         )}
                         {chatlogs && chatlogs.length > 0 && (
-                            <div style={{ flexBasis: '40%' }}>
+                            <div style={{ flexBasis: '40%', minWidth: 0, overflow: 'hidden' }}>
                                 <Box
                                     sx={{
                                         overflowY: 'auto',
@@ -956,6 +1071,28 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
                                         maxHeight: 'calc(100vh - 260px)'
                                     }}
                                 >
+                                    <div
+                                        style={{
+                                            display: 'flex',
+                                            marginLeft: '15px',
+                                            flexDirection: 'row',
+                                            justifyContent: 'space-between',
+                                            alignItems: 'center',
+                                            marginBottom: 10
+                                        }}
+                                    >
+                                        <Typography variant='h5'>
+                                            Sessions {pageLimit * (currentPage - 1) + 1} - {Math.min(pageLimit * currentPage, total)} of{' '}
+                                            {total}
+                                        </Typography>
+                                        <Pagination
+                                            style={{ justifyItems: 'right', justifyContent: 'center' }}
+                                            count={Math.ceil(total / pageLimit)}
+                                            onChange={onChange}
+                                            page={currentPage}
+                                            color='primary'
+                                        />
+                                    </div>
                                     {chatlogs.map((chatmsg, index) => (
                                         <ListItemButton
                                             key={index}
@@ -998,9 +1135,9 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
                             </div>
                         )}
                         {chatlogs && chatlogs.length > 0 && (
-                            <div style={{ flexBasis: '60%', paddingRight: '30px' }}>
+                            <div style={{ flexBasis: '60%', paddingRight: '30px', minWidth: 0, overflow: 'hidden' }}>
                                 {chatMessages && chatMessages.length > 1 && (
-                                    <div style={{ display: 'flex', flexDirection: 'row' }}>
+                                    <div style={{ marginBottom: 10, display: 'flex', flexDirection: 'row', alignItems: 'center' }}>
                                         <div style={{ flex: 1, marginLeft: '20px', marginBottom: '15px', marginTop: '10px' }}>
                                             {chatMessages[1].sessionId && (
                                                 <div>
@@ -1009,7 +1146,7 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
                                             )}
                                             {chatMessages[1].chatType && (
                                                 <div>
-                                                    Source:&nbsp;<b>{chatMessages[1].chatType === 'INTERNAL' ? 'UI' : 'API/Embed'}</b>
+                                                    Source:&nbsp;<b>{getChatType(chatMessages[1].chatType)}</b>
                                                 </div>
                                             )}
                                             {chatMessages[1].memoryType && (
@@ -1026,31 +1163,26 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
                                         <div
                                             style={{
                                                 display: 'flex',
-                                                flexDirection: 'column',
+                                                flexDirection: 'row',
                                                 alignContent: 'center',
                                                 alignItems: 'end'
                                             }}
                                         >
-                                            <StyledButton
-                                                sx={{ height: 'max-content', width: 'max-content' }}
-                                                variant='outlined'
-                                                color='error'
-                                                title='Clear Message'
-                                                onClick={() => clearChat(chatMessages[1])}
-                                                startIcon={<IconEraser />}
-                                            >
-                                                Clear
-                                            </StyledButton>
+                                            <Tooltip title='Clear Message'>
+                                                <IconButton color='error' onClick={() => clearChat(chatMessages[1])}>
+                                                    <IconEraser />
+                                                </IconButton>
+                                            </Tooltip>
                                             {chatMessages[1].sessionId && (
                                                 <Tooltip
                                                     title={
-                                                        'At your left 👈 you will see the Memory node that was used in this conversation. You need to have the matching Memory node with same parameters in the canvas, in order to delete the session conversations stored on the Memory node'
+                                                        'On the left 👈, you’ll see the Memory node used in this conversation. To delete the session conversations stored on that Memory node, you must have a matching Memory node with identical parameters in the canvas.'
                                                     }
                                                     placement='bottom'
                                                 >
-                                                    <h5 style={{ cursor: 'pointer', color: theme.palette.primary.main }}>
-                                                        Why my session is not deleted?
-                                                    </h5>
+                                                    <IconButton color='primary'>
+                                                        <IconBulb />
+                                                    </IconButton>
                                                 </Tooltip>
                                             )}
                                         </div>
@@ -1061,12 +1193,15 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
                                         display: 'flex',
                                         flexDirection: 'column',
                                         marginLeft: '20px',
-                                        border: '1px solid #e0e0e0',
-                                        borderRadius: `${customization.borderRadius}px`
+                                        marginBottom: '5px',
+                                        border: customization.isDarkMode ? 'none' : '1px solid #e0e0e0',
+                                        boxShadow: customization.isDarkMode ? '0 0 5px 0 rgba(255, 255, 255, 0.5)' : 'none',
+                                        borderRadius: `10px`,
+                                        overflow: 'hidden'
                                     }}
                                     className='cloud-message'
                                 >
-                                    <div style={{ width: '100%', height: '100%' }}>
+                                    <div style={{ width: '100%', height: '100%', overflowY: 'auto' }}>
                                         {chatMessages &&
                                             chatMessages.map((message, index) => {
                                                 if (message.type === 'apiMessage' || message.type === 'userMessage') {
@@ -1105,7 +1240,9 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
                                                                 style={{
                                                                     display: 'flex',
                                                                     flexDirection: 'column',
-                                                                    width: '100%'
+                                                                    width: '100%',
+                                                                    minWidth: 0,
+                                                                    overflow: 'hidden'
                                                                 }}
                                                             >
                                                                 {message.fileUploads && message.fileUploads.length > 0 && (
@@ -1176,10 +1313,30 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
                                                                                                             key={index}
                                                                                                             label={tool.tool}
                                                                                                             component='a'
-                                                                                                            sx={{ mr: 1, mt: 1 }}
+                                                                                                            sx={{
+                                                                                                                mr: 1,
+                                                                                                                mt: 1,
+                                                                                                                borderColor: tool.error
+                                                                                                                    ? 'error.main'
+                                                                                                                    : undefined,
+                                                                                                                color: tool.error
+                                                                                                                    ? 'error.main'
+                                                                                                                    : undefined
+                                                                                                            }}
                                                                                                             variant='outlined'
                                                                                                             clickable
-                                                                                                            icon={<IconTool size={15} />}
+                                                                                                            icon={
+                                                                                                                <IconTool
+                                                                                                                    size={15}
+                                                                                                                    color={
+                                                                                                                        tool.error
+                                                                                                                            ? theme.palette
+                                                                                                                                  .error
+                                                                                                                                  .main
+                                                                                                                            : undefined
+                                                                                                                    }
+                                                                                                                />
+                                                                                                            }
                                                                                                             onClick={() =>
                                                                                                                 onSourceDialogClick(
                                                                                                                     tool,
@@ -1246,44 +1403,7 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
                                                                                         )}
                                                                                         {agent.messages.length > 0 && (
                                                                                             <MemoizedReactMarkdown
-                                                                                                remarkPlugins={[remarkGfm, remarkMath]}
-                                                                                                rehypePlugins={[rehypeMathjax, rehypeRaw]}
-                                                                                                components={{
-                                                                                                    code({
-                                                                                                        inline,
-                                                                                                        className,
-                                                                                                        children,
-                                                                                                        ...props
-                                                                                                    }) {
-                                                                                                        const match = /language-(\w+)/.exec(
-                                                                                                            className || ''
-                                                                                                        )
-                                                                                                        return !inline ? (
-                                                                                                            <CodeBlock
-                                                                                                                key={Math.random()}
-                                                                                                                chatflowid={
-                                                                                                                    dialogProps.chatflow.id
-                                                                                                                }
-                                                                                                                isDialog={true}
-                                                                                                                language={
-                                                                                                                    (match && match[1]) ||
-                                                                                                                    ''
-                                                                                                                }
-                                                                                                                value={String(
-                                                                                                                    children
-                                                                                                                ).replace(/\n$/, '')}
-                                                                                                                {...props}
-                                                                                                            />
-                                                                                                        ) : (
-                                                                                                            <code
-                                                                                                                className={className}
-                                                                                                                {...props}
-                                                                                                            >
-                                                                                                                {children}
-                                                                                                            </code>
-                                                                                                        )
-                                                                                                    }
-                                                                                                }}
+                                                                                                chatflowid={dialogProps.chatflow.id}
                                                                                             >
                                                                                                 {agent.messages.length > 1
                                                                                                     ? agent.messages.join('\\n')
@@ -1369,9 +1489,24 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
                                                                                     key={index}
                                                                                     label={tool.tool}
                                                                                     component='a'
-                                                                                    sx={{ mr: 1, mt: 1 }}
+                                                                                    sx={{
+                                                                                        mr: 1,
+                                                                                        mt: 1,
+                                                                                        borderColor: tool.error ? 'error.main' : undefined,
+                                                                                        color: tool.error ? 'error.main' : undefined
+                                                                                    }}
                                                                                     variant='outlined'
                                                                                     clickable
+                                                                                    icon={
+                                                                                        <IconTool
+                                                                                            size={15}
+                                                                                            color={
+                                                                                                tool.error
+                                                                                                    ? theme.palette.error.main
+                                                                                                    : undefined
+                                                                                            }
+                                                                                        />
+                                                                                    }
                                                                                     onClick={() => onSourceDialogClick(tool, 'Used Tools')}
                                                                                 />
                                                                             )
@@ -1394,31 +1529,11 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
                                                                         })}
                                                                     </div>
                                                                 )}
-                                                                <div className='markdownanswer'>
-                                                                    {/* Messages are being rendered in Markdown format */}
-                                                                    <MemoizedReactMarkdown
-                                                                        remarkPlugins={[remarkGfm, remarkMath]}
-                                                                        rehypePlugins={[rehypeMathjax, rehypeRaw]}
-                                                                        components={{
-                                                                            code({ inline, className, children, ...props }) {
-                                                                                const match = /language-(\w+)/.exec(className || '')
-                                                                                return !inline ? (
-                                                                                    <CodeBlock
-                                                                                        key={Math.random()}
-                                                                                        chatflowid={dialogProps.chatflow.id}
-                                                                                        isDialog={true}
-                                                                                        language={(match && match[1]) || ''}
-                                                                                        value={String(children).replace(/\n$/, '')}
-                                                                                        {...props}
-                                                                                    />
-                                                                                ) : (
-                                                                                    <code className={className} {...props}>
-                                                                                        {children}
-                                                                                    </code>
-                                                                                )
-                                                                            }
-                                                                        }}
-                                                                    >
+                                                                <div
+                                                                    className='markdownanswer'
+                                                                    style={{ wordBreak: 'break-word', overflowWrap: 'break-word' }}
+                                                                >
+                                                                    <MemoizedReactMarkdown chatflowid={dialogProps.chatflow.id}>
                                                                         {message.message}
                                                                     </MemoizedReactMarkdown>
                                                                 </div>
@@ -1491,7 +1606,9 @@ const ViewMessagesDialog = ({ show, dialogProps, onCancel }) => {
                                                     return (
                                                         <Box
                                                             sx={{
-                                                                background: theme.palette.timeMessage.main,
+                                                                background: customization.isDarkMode
+                                                                    ? theme.palette.divider
+                                                                    : theme.palette.timeMessage.main,
                                                                 p: 2
                                                             }}
                                                             key={index}
